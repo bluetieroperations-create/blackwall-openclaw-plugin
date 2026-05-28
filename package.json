@@ -1,0 +1,42 @@
+{
+  "name": "blackwall-openclaw-plugin",
+  "version": "0.1.0",
+  "description": "BLACK_WALL pre-action guardrail for OpenClaw agents. Hooks `before_tool_call` to call forecast() before any tool runs; blocks STOP verdicts; auto-reports outcomes via observe(). Receipts are Ed25519-signed and verifiable offline.",
+  "type": "module",
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "files": [
+    "src",
+    "skills",
+    "README.md"
+  ],
+  "scripts": {
+    "check": "node --check src/index.mjs && node --check src/gate.mjs",
+    "test": "node smoke-test.mjs && node real-openclaw-test.mjs",
+    "test:smoke": "node smoke-test.mjs",
+    "test:real": "node real-openclaw-test.mjs"
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "clawhub",
+    "ai-agents",
+    "guardrails",
+    "ai-safety",
+    "blackwall",
+    "preflight",
+    "decision-receipt"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "blackwall-mcp": "^1.1.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
