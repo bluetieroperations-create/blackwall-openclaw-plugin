@@ -47,13 +47,41 @@ This plugin uses OpenClaw's standard `before_tool_call` hook contract. Because e
 
 ### NVIDIA NemoClaw deployment note
 
-NemoClaw runs OpenClaw inside a security-hardened sandbox container. To use BLACK_WALL with NemoClaw, bake the plugin into your sandbox image:
+NemoClaw runs OpenClaw inside a security-hardened sandbox container. To use BLACK_WALL with NemoClaw, bake the plugin into your sandbox image. Two equivalent options — pick whichever fits your build pipeline.
+
+**Option A — clone in the Dockerfile (simplest, no local checkout needed).** `sandbox-base` already includes `git`, so you can pull directly from the public release tag:
 
 ```dockerfile
 ARG SANDBOX_BASE=ghcr.io/nvidia/nemoclaw/sandbox-base:latest
 FROM ${SANDBOX_BASE}
 
-# Install the plugin
+# Pull the plugin. Defaults to `main`; override BLACKWALL_PLUGIN_REF to pin to a tag once one is published.
+ARG BLACKWALL_PLUGIN_REF=main
+RUN git clone --depth 1 --branch ${BLACKWALL_PLUGIN_REF} \
+      https://github.com/bluetieroperations-create/blackwall-openclaw-plugin.git \
+      /opt/blackwall-openclaw-plugin \
+ && cd /opt/blackwall-openclaw-plugin \
+ && npm ci --no-audit --no-fund
+
+# Wire it into OpenClaw's extensions directory and let OpenClaw refresh its config
+RUN mkdir -p /sandbox/.openclaw/extensions \
+ && cp -a /opt/blackwall-openclaw-plugin /sandbox/.openclaw/extensions/blackwall-openclaw-plugin \
+ && openclaw doctor --fix
+
+# Set the BLACK_WALL key (or inject via NemoClaw secret)
+ENV BLACKWALL_API_KEY=bw_live_xxx
+ENV BLACKWALL_MODE=observe
+
+WORKDIR /opt/nemoclaw
+```
+
+**Option B — COPY from a local checkout (if you're vendoring or running an internal fork).** Useful when the sandbox image build host doesn't have outbound git access:
+
+```dockerfile
+ARG SANDBOX_BASE=ghcr.io/nvidia/nemoclaw/sandbox-base:latest
+FROM ${SANDBOX_BASE}
+
+# Copy a local checkout into the image
 COPY blackwall-openclaw-plugin/ /opt/blackwall-openclaw-plugin/
 WORKDIR /opt/blackwall-openclaw-plugin
 RUN npm ci --no-audit --no-fund
@@ -63,7 +91,6 @@ RUN mkdir -p /sandbox/.openclaw/extensions \
  && cp -a /opt/blackwall-openclaw-plugin /sandbox/.openclaw/extensions/blackwall-openclaw-plugin \
  && openclaw doctor --fix
 
-# Set the BLACK_WALL key (or inject via NemoClaw secret)
 ENV BLACKWALL_API_KEY=bw_live_xxx
 ENV BLACKWALL_MODE=observe
 
