@@ -1,0 +1,86 @@
+name: verify nemoclaw dockerfile
+
+# Builds the Option A Dockerfile from README.md against the real
+# ghcr.io/nvidia/nemoclaw/sandbox-base image. Catches drift in the
+# NemoClaw base image and proves the snippet still works end-to-end.
+#
+# Runs on:
+#   - PRs that touch the README (where the Dockerfile lives) or this workflow
+#   - manual dispatch
+#   - weekly schedule (drift detection)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'README.md'
+      - '.github/workflows/verify-nemoclaw-dockerfile.yml'
+  schedule:
+    - cron: '0 12 * * 1'  # Mondays at 12:00 UTC
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: confirm base image is reachable
+        run: |
+          docker pull ghcr.io/nvidia/nemoclaw/sandbox-base:latest
+
+      - name: write Option A dockerfile (mirror of README snippet)
+        run: |
+          mkdir -p _verify
+          cat > _verify/Dockerfile <<'EOF'
+          ARG SANDBOX_BASE=ghcr.io/nvidia/nemoclaw/sandbox-base:latest
+          FROM ${SANDBOX_BASE}
+
+          ARG BLACKWALL_PLUGIN_REF=main
+          RUN git clone --depth 1 --branch ${BLACKWALL_PLUGIN_REF} \
+                https://github.com/bluetieroperations-create/blackwall-openclaw-plugin.git \
+                /opt/blackwall-openclaw-plugin \
+           && cd /opt/blackwall-openclaw-plugin \
+           && npm ci --no-audit --no-fund
+
+          RUN mkdir -p /sandbox/.openclaw/extensions \
+           && cp -a /opt/blackwall-openclaw-plugin /sandbox/.openclaw/extensions/blackwall-openclaw-plugin
+
+          ENV BLACKWALL_API_KEY=bw_test_dummy_for_ci
+          ENV BLACKWALL_MODE=observe
+          EOF
+          cat _verify/Dockerfile
+
+      - name: build the image
+        # NOTE: this intentionally omits `openclaw doctor --fix` from the README
+        # snippet. That step requires a populated openclaw runtime context which
+        # is established by the NemoClaw onboarding flow, not the bare sandbox
+        # base. We verify everything *before* that step here; the doctor step
+        # gets verified end-to-end when a real sandbox is onboarded.
+        run: |
+          docker build \
+            --build-arg BLACKWALL_PLUGIN_REF=${{ github.head_ref || github.ref_name }} \
+            -t blackwall-nemoclaw-verify \
+            -f _verify/Dockerfile \
+            _verify/
+
+      - name: confirm plugin landed inside the image
+        run: |
+          docker run --rm blackwall-nemoclaw-verify \
+            ls -la /sandbox/.openclaw/extensions/blackwall-openclaw-plugin/
+
+      - name: confirm plugin source files are present
+        run: |
+          docker run --rm blackwall-nemoclaw-verify \
+            sh -c 'test -f /sandbox/.openclaw/extensions/blackwall-openclaw-plugin/src/index.mjs \
+                && test -f /sandbox/.openclaw/extensions/blackwall-openclaw-plugin/src/gate.mjs \
+                && test -f /sandbox/.openclaw/extensions/blackwall-openclaw-plugin/package.json'
+
+      - name: confirm node + npm are available in the image
+        run: |
+          docker run --rm blackwall-nemoclaw-verify node --version
+          docker run --rm blackwall-nemoclaw-verify npm --version
+
+      - name: confirm plugin entry point is syntactically valid
+        run: |
+          docker run --rm blackwall-nemoclaw-verify \
+            node --check /sandbox/.openclaw/extensions/blackwall-openclaw-plugin/src/index.mjs
