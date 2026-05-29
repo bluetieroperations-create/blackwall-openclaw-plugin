@@ -49,7 +49,7 @@ This plugin uses OpenClaw's standard `before_tool_call` hook contract. Because e
 
 NemoClaw runs OpenClaw inside a security-hardened sandbox container. To use BLACK_WALL with NemoClaw, bake the plugin into your sandbox image. Two equivalent options — pick whichever fits your build pipeline.
 
-**Option A — clone in the Dockerfile (simplest, no local checkout needed).** `sandbox-base` already includes `git`, so you can pull directly from the public release tag:
+**Option A — clone in the Dockerfile (simplest, no local checkout needed).** `sandbox-base` already includes `git`, so you can pull directly from the public repo. Default ref is `main`; override `BLACKWALL_PLUGIN_REF` with a tag once you want a pinned release.
 
 ```dockerfile
 ARG SANDBOX_BASE=ghcr.io/nvidia/nemoclaw/sandbox-base:latest
