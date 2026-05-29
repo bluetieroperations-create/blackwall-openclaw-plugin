@@ -31,6 +31,49 @@ BLACKWALL_MODE=observe     # or 'enforce' once you trust the verdicts
 
 That's it. Every tool the agent tries to call goes through `before_tool_call` → BLACK_WALL forecast → verdict.
 
+## Where this plugin runs
+
+This plugin uses OpenClaw's standard `before_tool_call` hook contract. Because every major OpenClaw wrapper preserves that contract, this single package works across the wider ecosystem with the install above. No wrapper-specific build needed for most.
+
+| Host | Compatibility | Install path |
+|---|---|---|
+| **OpenClaw** (canonical) | ✅ | The install snippet above. |
+| **NVIDIA NemoClaw** (sandbox runtime) | ✅ — see deployment note below | Bake into your sandbox Dockerfile so the plugin lands in `/sandbox/.openclaw/extensions/`. |
+| **AionUi** (multi-CLI cowork app) | ✅ | Install in your underlying OpenClaw; AionUi spawns OpenClaw and picks up the plugin transparently. |
+| **HiClaw** (Kubernetes multi-runtime orchestrator) | ✅ | Install in the OpenClaw Worker container's image. Worker Template Marketplace inclusion is on our roadmap. |
+| **ClawX** (desktop GUI) | ✅ | Install in your underlying OpenClaw. |
+| **openclaw-mission-control / openclaw-control-center / openclaw-studio** | ✅ | Same — wrapper picks up the plugin from your local OpenClaw. |
+| **openclaw-china-docker / openclaw-termux / OpenClawInstaller** | ✅ | Standard install inside their bundled OpenClaw. |
+
+### NVIDIA NemoClaw deployment note
+
+NemoClaw runs OpenClaw inside a security-hardened sandbox container. To use BLACK_WALL with NemoClaw, bake the plugin into your sandbox image:
+
+```dockerfile
+ARG SANDBOX_BASE=ghcr.io/nvidia/nemoclaw/sandbox-base:latest
+FROM ${SANDBOX_BASE}
+
+# Install the plugin
+COPY blackwall-openclaw-plugin/ /opt/blackwall-openclaw-plugin/
+WORKDIR /opt/blackwall-openclaw-plugin
+RUN npm ci --no-audit --no-fund
+
+# Wire it into OpenClaw's extensions directory and let OpenClaw refresh its config
+RUN mkdir -p /sandbox/.openclaw/extensions \
+ && cp -a /opt/blackwall-openclaw-plugin /sandbox/.openclaw/extensions/blackwall-openclaw-plugin \
+ && openclaw doctor --fix
+
+# Set the BLACK_WALL key (or inject via NemoClaw secret)
+ENV BLACKWALL_API_KEY=bw_live_xxx
+ENV BLACKWALL_MODE=observe
+
+WORKDIR /opt/nemoclaw
+```
+
+Then onboard the sandbox: `nemoclaw onboard --from Dockerfile`.
+
+**Default blueprint inclusion is on our roadmap.** Once accepted into `nemoclaw-blueprint/openclaw-plugins/`, every NemoClaw deployment will include pre-action gating by default with no Dockerfile work needed.
+
 ## What you get back per tool call
 
 - `GO` / `CAUTION` / `STOP`
