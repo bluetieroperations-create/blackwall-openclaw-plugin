@@ -1,0 +1,70 @@
+name: build blueprint bundle
+
+# Triggered on:
+#   - any tag push matching v* (release flow)
+#   - manual dispatch (for testing)
+#   - PRs that touch src/ or build config (regression check)
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/build-blueprint-bundle.yml'
+
+permissions:
+  contents: write   # needed to upload release artifacts
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: source syntax check
+        run: npm run check
+
+      - name: bundle for nemoclaw blueprint
+        run: |
+          npx esbuild src/index.mjs \
+            --bundle \
+            --platform=node \
+            --target=node22 \
+            --format=esm \
+            --external:openclaw/* \
+            --outfile=dist/blueprint-bundle/index.js \
+            --minify-whitespace
+
+      - name: verify bundle syntax
+        run: node --check dist/blueprint-bundle/index.js
+
+      - name: report bundle size
+        run: |
+          ls -la dist/blueprint-bundle/
+          echo "bundle_size=$(stat -c%s dist/blueprint-bundle/index.js)" >> $GITHUB_OUTPUT
+        id: size
+
+      - name: upload bundle artifact (always)
+        uses: actions/upload-artifact@v4
+        with:
+          name: blueprint-bundle
+          path: dist/blueprint-bundle/
+          retention-days: 90
+
+      - name: attach bundle to release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/blueprint-bundle/index.js
+          fail_on_unmatched_files: true
