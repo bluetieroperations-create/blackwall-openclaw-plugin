@@ -103,15 +103,18 @@ jobs:
       - name: runtime smoke — hook fires + gates a destructive call in sandbox-base
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
-          BW_KEY: ${{ secrets.BLACKWALL_API_KEY }}
+          BLACKWALL_API_KEY: ${{ secrets.BLACKWALL_API_KEY }}
         run: |
-          if [ -z "$BW_KEY" ]; then
+          if [ -z "$BLACKWALL_API_KEY" ]; then
             echo "BLACKWALL_API_KEY secret not set — skipping runtime smoke."
             echo "Add it under Settings > Secrets and variables > Actions, then re-dispatch."
             exit 0
           fi
+          # Pass-through form (-e VAR with no =value): the secret is read from the
+          # step env and never appears on the docker command line / process table
+          # (audit L-1 hardening — zero exposure window).
           docker run --rm \
-            -e BLACKWALL_API_KEY="$BW_KEY" \
+            -e BLACKWALL_API_KEY \
             -e BLACKWALL_MODE=enforce \
             blackwall-nemoclaw-verify \
             node /sandbox/.openclaw/extensions/blackwall-openclaw-plugin/scripts/sandbox-smoke.mjs
