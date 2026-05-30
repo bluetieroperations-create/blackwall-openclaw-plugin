@@ -92,3 +92,26 @@ jobs:
         run: |
           docker run --rm blackwall-nemoclaw-verify \
             node --check /sandbox/.openclaw/extensions/blackwall-openclaw-plugin/src/index.mjs
+
+      # RUNTIME PROOF (manual dispatch only): run the before_tool_call smoke INSIDE the
+      # real sandbox-base image, against LIVE BLACK_WALL. Proves the hook fires + gates a
+      # destructive call from the sandbox image/network — the thing the build-only steps
+      # above can't show. Needs a BLACKWALL_API_KEY repo secret (use a dedicated low-limit
+      # CI key). Skips cleanly when the secret is absent (e.g. fork PRs) so it never breaks
+      # the build. Does NOT cover `openclaw doctor --fix` / the agent pipeline — that needs
+      # a full NemoClaw onboarding (Level B in docs/sandbox-smoke-test.md).
+      - name: runtime smoke — hook fires + gates a destructive call in sandbox-base
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          BW_KEY: ${{ secrets.BLACKWALL_API_KEY }}
+        run: |
+          if [ -z "$BW_KEY" ]; then
+            echo "BLACKWALL_API_KEY secret not set — skipping runtime smoke."
+            echo "Add it under Settings > Secrets and variables > Actions, then re-dispatch."
+            exit 0
+          fi
+          docker run --rm \
+            -e BLACKWALL_API_KEY="$BW_KEY" \
+            -e BLACKWALL_MODE=enforce \
+            blackwall-nemoclaw-verify \
+            node /sandbox/.openclaw/extensions/blackwall-openclaw-plugin/scripts/sandbox-smoke.mjs
