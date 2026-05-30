@@ -31,7 +31,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "blackwall-mcp": "^1.1.0"
+    "blackwall-mcp": "^1.2.0"
   },
   "peerDependencies": {
     "openclaw": ">=2026.4.0"

@@ -9,6 +9,9 @@ name: verify nemoclaw dockerfile
 #   - manual dispatch
 #   - weekly schedule (drift detection)
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
   pull_request:
@@ -56,9 +59,14 @@ jobs:
         # is established by the NemoClaw onboarding flow, not the bare sandbox
         # base. We verify everything *before* that step here; the doctor step
         # gets verified end-to-end when a real sandbox is onboarded.
+        #
+        # SECURITY: the branch ref is passed via env (not interpolated directly into
+        # the run script), so a hostile branch name can't inject shell. (audit L-1)
+        env:
+          BLACKWALL_PLUGIN_REF: ${{ github.head_ref || github.ref_name }}
         run: |
           docker build \
-            --build-arg BLACKWALL_PLUGIN_REF=${{ github.head_ref || github.ref_name }} \
+            --build-arg BLACKWALL_PLUGIN_REF="$BLACKWALL_PLUGIN_REF" \
             -t blackwall-nemoclaw-verify \
             -f _verify/Dockerfile \
             _verify/
