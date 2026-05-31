@@ -193,7 +193,7 @@ export async function handleBeforeToolCall(event, cfg, logger = console) {
         severity: 'warning',
         timeoutMs: 60_000,
         timeoutBehavior: 'deny',
-        pluginId: 'blackwall',
+        pluginId: 'blackwall-openclaw-plugin',
       },
     };
   }
