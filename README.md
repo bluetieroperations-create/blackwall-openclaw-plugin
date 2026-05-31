@@ -61,19 +61,27 @@ RUN git clone --depth 1 --branch ${BLACKWALL_PLUGIN_REF} \
       https://github.com/bluetieroperations-create/blackwall-openclaw-plugin.git \
       /opt/blackwall-openclaw-plugin \
  && cd /opt/blackwall-openclaw-plugin \
- && npm ci --no-audit --no-fund
+ && npm ci --omit=peer --no-audit --no-fund   # --omit=peer: do NOT vendor the `openclaw` peer dep — OpenClaw links it at install; vendoring it breaks the plugin install
 
-# Wire it into OpenClaw's extensions directory and let OpenClaw refresh its config
-RUN mkdir -p /sandbox/.openclaw/extensions \
- && cp -a /opt/blackwall-openclaw-plugin /sandbox/.openclaw/extensions/blackwall-openclaw-plugin \
+# Register it, then make it readable by the unprivileged sandbox user. The NemoClaw
+# sandbox agent runs as a NON-root uid (e.g. 998), but Docker RUN executes as root —
+# so the baked-in files must be world-readable + the dirs traversable or the plugin
+# silently fails to load with a permission error.
+RUN openclaw plugins install /opt/blackwall-openclaw-plugin --force \
+ && chmod -R a+rX /sandbox/.openclaw/extensions/blackwall-openclaw-plugin \
  && openclaw doctor --fix
 
-# Set the BLACK_WALL key (or inject via NemoClaw secret)
+# Set the BLACK_WALL key + mode. NOTE: a bare `ENV` here is NOT seen by the agent/
+# `nemoclaw exec` runtime — inject the key as a NemoClaw secret/credential so the
+# gateway process actually receives it (a Dockerfile ENV alone leaves the plugin
+# fail-open with "No apiKey configured").
 ENV BLACKWALL_API_KEY=bw_live_xxx
 ENV BLACKWALL_MODE=observe
 
 WORKDIR /opt/nemoclaw
 ```
+
+> **Verified against the real `ghcr.io/nvidia/nemoclaw/sandbox-base` (2026-05-31):** the plugin builds in, loads as `Format: openclaw` (`openclaw plugins inspect`), and `register()` runs inside the onboarded sandbox. The two `RUN` corrections above (`--omit=peer`, `chmod -R a+rX`) are required — the naive `npm ci` + root `cp` fails to load under the sandbox's unprivileged user. See **NemoClaw egress** below for the network policy the plugin needs.
 
 **Option B — COPY from a local checkout (if you're vendoring or running an internal fork).** Useful when the sandbox image build host doesn't have outbound git access:
 
@@ -84,13 +92,15 @@ FROM ${SANDBOX_BASE}
 # Copy a local checkout into the image
 COPY blackwall-openclaw-plugin/ /opt/blackwall-openclaw-plugin/
 WORKDIR /opt/blackwall-openclaw-plugin
-RUN npm ci --no-audit --no-fund
+RUN npm ci --omit=peer --no-audit --no-fund   # --omit=peer: OpenClaw links the `openclaw` peer dep at install; vendoring it breaks the install
 
-# Wire it into OpenClaw's extensions directory and let OpenClaw refresh its config
-RUN mkdir -p /sandbox/.openclaw/extensions \
- && cp -a /opt/blackwall-openclaw-plugin /sandbox/.openclaw/extensions/blackwall-openclaw-plugin \
+# Register it + make it readable by the unprivileged sandbox user (Docker RUN is
+# root; the agent runs as a non-root uid and otherwise hits a permission error).
+RUN openclaw plugins install /opt/blackwall-openclaw-plugin --force \
+ && chmod -R a+rX /sandbox/.openclaw/extensions/blackwall-openclaw-plugin \
  && openclaw doctor --fix
 
+# Inject the key via a NemoClaw secret (a bare ENV is not seen by the agent runtime).
 ENV BLACKWALL_API_KEY=bw_live_xxx
 ENV BLACKWALL_MODE=observe
 
@@ -98,6 +108,29 @@ WORKDIR /opt/nemoclaw
 ```
 
 Then onboard the sandbox: `nemoclaw onboard --from Dockerfile`.
+
+### NemoClaw egress — the plugin needs `blackwalltier.com` allowed
+
+NemoClaw sandboxes enforce **default-deny egress through a proxy** (`HTTPS_PROXY`). The plugin's `forecast()`/`observe()` calls to `https://blackwalltier.com` are blocked until you add a network policy, or the gate silently **fails open** (logs `forecast() failed … proceeding without gate`). Add this custom preset:
+
+```yaml
+# blackwall-egress.yaml
+preset:
+  name: blackwall-egress
+network_policies:
+  blackwall:
+    name: blackwall
+    endpoints:
+      - host: blackwalltier.com
+        port: 443
+        access: full
+```
+
+```bash
+nemoclaw <sandbox> policy-add blackwall-egress --from-file blackwall-egress.yaml --yes
+```
+
+(Custom `BLACKWALL_BASE_URL`? Use that host instead.) This YAML is validated against the real sandbox (`Policy version … loaded`).
 
 **Default blueprint inclusion is on our roadmap.** Once accepted into `nemoclaw-blueprint/openclaw-plugins/`, every NemoClaw deployment will include pre-action gating by default with no Dockerfile work needed.
 
