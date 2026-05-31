@@ -144,6 +144,12 @@ export async function handleBeforeToolCall(event, cfg, logger = console) {
   if (k && verdict?.id) pendingForecasts.set(k, verdict);
 
   const recommendation = verdict?.recommendation;
+  const riskScore = typeof verdict?.risk_score === 'number' ? verdict.risk_score : '?';
+  // One concise line per gated tool call so operators can see the gate working
+  // (and to make the before_tool_call hook's firing observable in agent logs).
+  logger.info?.(
+    `[blackwall] ${cfg.mode} · ${toolName} → ${recommendation ?? '?'} (risk ${riskScore}/100${verdict?.id ? `, forecast ${verdict.id}` : ''})`
+  );
 
   // observe mode: never abort, just score + log.
   if (cfg.mode === 'observe') {
