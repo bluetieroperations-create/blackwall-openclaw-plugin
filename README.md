@@ -81,7 +81,7 @@ ENV BLACKWALL_MODE=observe
 WORKDIR /opt/nemoclaw
 ```
 
-> **Verified against the real `ghcr.io/nvidia/nemoclaw/sandbox-base` (2026-05-31):** the plugin builds in, loads as `Format: openclaw` (`openclaw plugins inspect`), and `register()` runs inside the onboarded sandbox. The two `RUN` corrections above (`--omit=peer`, `chmod -R a+rX`) are required — the naive `npm ci` + root `cp` fails to load under the sandbox's unprivileged user. See **NemoClaw egress** below for the network policy the plugin needs.
+> **Observed in the real `ghcr.io/nvidia/nemoclaw/sandbox-base` (2026-05-31):** inside an onboarded sandbox the plugin loads as `Format: openclaw` (`openclaw plugins inspect`), `register()` runs, and the `before_tool_call` hook fires. Each correction above was validated **individually** in-sandbox — `--omit=peer` (naive `npm ci` vendors the `openclaw` peer and breaks `plugins install`) and `chmod -R a+rX` (root-baked files fail to load under the sandbox's unprivileged uid). **Caveat: a clean rebuild + onboard from this exact Dockerfile as a single unit has not yet been run** — the live run applied these fixes piecemeal (manual `chmod`/reinstall via `docker exec`). The recipe reflects what was proven step-by-step; verify a from-scratch build before relying on it in production. See **NemoClaw egress** below for the network policy the plugin needs.
 
 **Option B — COPY from a local checkout (if you're vendoring or running an internal fork).** Useful when the sandbox image build host doesn't have outbound git access:
 
@@ -130,7 +130,7 @@ network_policies:
 nemoclaw <sandbox> policy-add blackwall-egress --from-file blackwall-egress.yaml --yes
 ```
 
-(Custom `BLACKWALL_BASE_URL`? Use that host instead.) This YAML is validated against the real sandbox (`Policy version … loaded`).
+(Custom `BLACKWALL_BASE_URL`? Use that host instead.) In the live run this YAML **loaded** in the real sandbox (`Policy version … loaded`), but end-to-end egress to `blackwalltier.com` through the sandbox proxy was **not** confirmed working in-session — the proxy did not honor the new policy without a gateway recover/restart, so a live forecast round-trip from inside the sandbox is still **pending**. Treat this preset as the right shape, not a proven-working egress path; verify connectivity (e.g. a `curl https://blackwalltier.com` from inside the sandbox) after applying it.
 
 **Default blueprint inclusion is on our roadmap.** Once accepted into `nemoclaw-blueprint/openclaw-plugins/`, every NemoClaw deployment will include pre-action gating by default with no Dockerfile work needed.
 
