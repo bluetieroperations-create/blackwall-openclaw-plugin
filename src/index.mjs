@@ -38,7 +38,7 @@ import {
  */
 export function createBlackwallPlugin(config = {}) {
   return definePluginEntry({
-    id: 'blackwall',
+    id: 'blackwall-openclaw-plugin',
     name: 'BLACK_WALL Preflight Guardrail',
     description:
       'Pre-action risk check for OpenClaw tool calls. Hooks before_tool_call to ' +

@@ -3,17 +3,22 @@
   "version": "0.1.0",
   "description": "BLACK_WALL pre-action guardrail for OpenClaw agents. Hooks `before_tool_call` to call forecast() before any tool runs; blocks STOP verdicts; auto-reports outcomes via observe(). Receipts are Ed25519-signed and verifiable offline.",
   "type": "module",
-  "main": "./src/index.mjs",
+  "main": "./index.mjs",
   "exports": {
-    ".": "./src/index.mjs"
+    ".": "./index.mjs"
+  },
+  "openclaw": {
+    "extensions": ["./index.mjs"]
   },
   "files": [
+    "index.mjs",
+    "openclaw.plugin.json",
     "src",
     "skills",
     "README.md"
   ],
   "scripts": {
-    "check": "node --check src/index.mjs && node --check src/gate.mjs",
+    "check": "node --check index.mjs && node --check src/index.mjs && node --check src/gate.mjs",
     "test": "node smoke-test.mjs && node real-openclaw-test.mjs",
     "test:smoke": "node smoke-test.mjs",
     "test:real": "node real-openclaw-test.mjs"
