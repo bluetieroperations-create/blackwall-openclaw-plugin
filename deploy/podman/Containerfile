@@ -1,0 +1,57 @@
+# BLACK_WALL × OpenClaw — rootless sandbox image.
+#
+# Two layers of safety in one container:
+#   1. DECISION    — the BLACK_WALL plugin gates every tool call (enforce + failClosed):
+#                    a STOP-rated destructive action is blocked BEFORE it runs.
+#   2. CONTAINMENT — rootless Podman + dropped caps + no-new-privileges + a disposable
+#                    workspace volume, so even an action that slips the gate can't reach
+#                    the host, and the whole environment is snapshot / roll-back-able.
+#
+# Build:  ./build.sh          ->  podman build -t blackwall-sandbox:latest .
+# Prove:  ./demo-blocked.sh   ->  destructive tool call -> BLOCKED (deterministic, no LLM key)
+# Run:    ./run-agent.sh      ->  the full OpenClaw agent, gated, in the box
+
+FROM docker.io/library/node:22-bookworm-slim
+
+# base tooling: git (clone the plugin), tini (clean PID1), ca-certs (TLS egress)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates tini \
+ && rm -rf /var/lib/apt/lists/*
+
+# Non-root user the agent runs as. Rootless Podman + --userns=keep-id maps this to YOU.
+ARG APP_UID=10001
+RUN useradd -m -u ${APP_UID} -s /bin/bash agent
+ENV HOME=/home/agent
+WORKDIR /home/agent
+
+# --- DECISION layer: the BLACK_WALL plugin. The gate demo needs ONLY this. ---
+# --omit=peer: OpenClaw links the `openclaw` peer dep at install time; vendoring it breaks install.
+ARG BLACKWALL_PLUGIN_REF=main
+RUN git clone --depth 1 --branch ${BLACKWALL_PLUGIN_REF} \
+      https://github.com/bluetieroperations-create/blackwall-openclaw-plugin.git \
+      /opt/blackwall-openclaw-plugin \
+ && cd /opt/blackwall-openclaw-plugin \
+ && npm ci --omit=peer --no-audit --no-fund \
+ && chmod -R a+rX /opt/blackwall-openclaw-plugin
+
+# --- Full-agent layer (optional): OpenClaw itself. Best-effort so the gate demo ALWAYS builds. ---
+ARG OPENCLAW_VERSION=2026.4.27
+RUN npm install -g openclaw@${OPENCLAW_VERSION} \
+ || echo "WARN: 'openclaw' global install failed — the gate demo still works; run-agent.sh (full agent) needs a working openclaw CLI, match your own install method."
+
+COPY --chown=agent:agent openclaw.json /home/agent/.openclaw/openclaw.json
+COPY --chown=agent:agent gate-demo.mjs  /home/agent/gate-demo.mjs
+
+USER agent
+# Register the plugin into this user's ~/.openclaw for the full-agent path (best-effort).
+RUN openclaw plugins install /opt/blackwall-openclaw-plugin --force \
+ && openclaw doctor --fix \
+ || echo "WARN: 'openclaw plugins install' skipped (no openclaw CLI). Gate demo unaffected."
+
+# Secure-by-default gate posture. REAL keys are injected at runtime via --env-file, NEVER baked.
+ENV BLACKWALL_MODE=enforce \
+    BLACKWALL_FAIL_CLOSED=1 \
+    BLACKWALL_BASE_URL=https://blackwalltier.com
+
+ENTRYPOINT ["/usr/bin/tini","--"]
+CMD ["bash"]

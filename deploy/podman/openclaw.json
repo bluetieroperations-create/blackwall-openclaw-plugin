@@ -1,0 +1,22 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/home/agent/workspace",
+      "model": { "primary": "openrouter/google/gemini-2.5-flash" },
+      "sandbox": { "mode": "off" }
+    },
+    "list": [
+      { "id": "main", "default": true, "identity": { "name": "SandboxAgent", "emoji": "🧪" } }
+    ]
+  },
+  "tools": {
+    "allow": ["shell.*", "shell.run", "exec.*", "fs.*", "read", "write"],
+    "deny": ["system.*", "sudo.*", "os.shutdown", "process.kill"],
+    "profile": "full"
+  },
+  "plugins": {
+    "enabled": true,
+    "entries": { "blackwall-openclaw-plugin": { "enabled": true } }
+  },
+  "gateway": { "mode": "local", "port": 18789, "bind": "loopback" }
+}
