@@ -35,20 +35,50 @@ const MAX_BODY = Number(process.env.RELAY_MAX_BODY || 256 * 1024); // forecasts 
 const UP = new URL(UPSTREAM);
 
 // Lock the surface to exactly what the gate + doctor call. The client supplies the
-// path only; it is appended to the FIXED upstream host (no SSRF — host is not steerable).
+// path only; it is appended to the FIXED upstream host. NOTE: the allowlist is checked
+// against the NORMALIZED pathname (post-`new URL` dot-segment resolution), not the raw
+// req.url — otherwise `/api/v1/forecast/../../../admin` normalizes to `/admin` and
+// escapes the prefix. See the host/protocol hard-assert below for off-host defense.
 const ALLOW = [
-  /^\/api\/v1\/forecast(\/|$|\?)/,
-  /^\/api\/v1\/receipts(\/|$|\?)/,
+  /^\/api\/v1\/forecast(\/|$)/,
+  /^\/api\/v1\/receipts(\/|$)/,
   /^\/\.well-known\/blackwall-/,
 ];
+
+// Methods the API actually uses (GET well-known/receipts, POST forecast, PATCH observe/
+// outcome, plus HEAD/OPTIONS as harmless). Forwarding arbitrary DELETE/PUT to the upstream
+// with the caller's key is needless attack surface — reject anything else.
+const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PATCH']);
 
 const server = http.createServer((req, res) => {
   const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
 
   if (TOKEN && req.headers['x-relay-token'] !== TOKEN) return send(403, { error: 'relay: forbidden' });
 
-  const path = req.url || '/';
-  if (!ALLOW.some((re) => re.test(path))) return send(404, { error: 'relay: path not allowed', path });
+  if (!ALLOWED_METHODS.has(req.method)) return send(405, { error: 'relay: method not allowed' });
+
+  const rawPath = req.url || '/';
+
+  // Build + validate the upstream target ONCE, up front. This resolves dot-segments,
+  // userinfo, and any authority trickery the same way fetch() will, so what we validate
+  // is exactly what we send. Reject if the path doesn't start with '/' (absolute-form /
+  // authority-form request targets), if the URL won't parse, if it resolves off-host, or
+  // if the normalized pathname falls outside the allowlist.
+  if (rawPath[0] !== '/') return send(404, { error: 'relay: path not allowed' });
+  let target;
+  try {
+    target = new URL(`${UPSTREAM}${rawPath}`);
+  } catch {
+    return send(400, { error: 'relay: bad request target' });
+  }
+  // Hard-assert host + scheme (defense-in-depth — no observed bypass, but cheap and total).
+  if (target.protocol !== UP.protocol || target.host !== UP.host) {
+    return send(502, { error: 'relay: refused off-host target' });
+  }
+  // Re-check the NORMALIZED pathname against the allowlist (closes the dot-segment bypass).
+  if (!ALLOW.some((re) => re.test(target.pathname))) {
+    return send(404, { error: 'relay: path not allowed' });
+  }
 
   const chunks = [];
   let size = 0;
@@ -64,14 +94,16 @@ const server = http.createServer((req, res) => {
     if (aborted) return;
     const body = chunks.length ? Buffer.concat(chunks) : undefined;
 
-    // Forward only the headers the API needs. Host is set to the real upstream;
-    // hop-by-hop / proxy / relay headers are intentionally dropped.
-    const headers = { accept: 'application/json', host: UP.host };
+    // Forward only the headers the API needs. fetch() derives the Host header from the
+    // target URL authority (an explicit `host` here would be ignored), so the upstream
+    // always sees blackwalltier.com. Hop-by-hop / proxy / relay / attacker headers are
+    // intentionally dropped — only authorization + content-type pass through.
+    const headers = { accept: 'application/json' };
     if (req.headers['authorization']) headers['authorization'] = req.headers['authorization'];
     if (req.headers['content-type'])  headers['content-type']  = req.headers['content-type'];
 
     try {
-      const upstream = await fetch(`${UPSTREAM}${path}`, {
+      const upstream = await fetch(target, {
         method: req.method,
         headers,
         body: (req.method === 'GET' || req.method === 'HEAD') ? undefined : body,
@@ -80,9 +112,9 @@ const server = http.createServer((req, res) => {
       const buf = Buffer.from(await upstream.arrayBuffer());
       res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') || 'application/json' });
       res.end(buf);
-      console.log(`${req.method} ${path.split('?')[0]} -> ${upstream.status} (${buf.length}b)`);
+      console.log(`${req.method} ${target.pathname} -> ${upstream.status} (${buf.length}b)`);
     } catch (e) {
-      console.error(`relay error ${req.method} ${path.split('?')[0]}: ${e.message}`);
+      console.error(`relay error ${req.method} ${target.pathname}: ${e.message}`);
       send(502, { error: 'relay: upstream failed', message: e.message });
     }
   });

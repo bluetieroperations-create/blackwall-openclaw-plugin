@@ -91,10 +91,16 @@ and pursue the NemoClaw submission.
   from the sandbox until you widen it). Set it to the host's sandbox-facing IP and add
   a host firewall rule so **only the sandbox subnet** can reach the port — never leave
   `0.0.0.0:8787` open to the public internet on a droplet.
-- **Not an open proxy.** Upstream is locked to `BLACKWALL_UPSTREAM` (the client can't
-  steer the host); the path must match the forecast/receipts/well-known allowlist;
-  body is capped. Worst case for someone who reaches the port: they can relay calls to
-  `blackwalltier.com` **using their own key** — low value, and the firewall closes it.
+- **Not an open proxy.** Upstream host + scheme are locked to `BLACKWALL_UPSTREAM` — the
+  relay hard-asserts `new URL(target).host`/`.protocol` match the upstream after URL
+  normalization and refuses anything else (502), so the client cannot steer off-host via
+  userinfo (`@evil.com`), extra-slash authority (`//evil.com`), or absolute-form request
+  targets. The **normalized** pathname (after dot-segment resolution) must match the
+  forecast/receipts/well-known allowlist — so `/api/v1/forecast/../../../admin`, which
+  resolves to `/admin`, is rejected (404), not forwarded. Only GET/HEAD/OPTIONS/POST/PATCH
+  are allowed (405 otherwise); body is capped. Worst case for someone who reaches the port:
+  they can relay the **allowlisted** calls to `blackwalltier.com` **using their own
+  Authorization header** — low value, and the firewall closes it.
 - **`RELAY_TOKEN` caveat:** you can require an `X-Relay-Token` header, but the plugin's
   `forecast()`/`observe()` cannot add custom headers, so enabling it breaks the plugin
   path. Leave it unset for the gate; it's only useful for locking down manual `curl`
