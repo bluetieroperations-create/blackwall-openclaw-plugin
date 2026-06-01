@@ -44,7 +44,7 @@ function makeLogger() {
 }
 
 /** Build a resolved config with default mocks. Override per test. */
-function makeCfg({ mode = 'observe', cautionAction = 'approve', forecastResult, forecastError, observeImpl, onEvent, shouldGate } = {}) {
+function makeCfg({ mode = 'observe', cautionAction = 'approve', failClosed, forecastResult, forecastError, observeImpl, onEvent, shouldGate } = {}) {
   const events = [];
   const forecastCalls = [];
   const observeCalls = [];
@@ -64,6 +64,7 @@ function makeCfg({ mode = 'observe', cautionAction = 'approve', forecastResult, 
     baseUrl: 'https://blackwalltier.example',
     mode,
     cautionAction,
+    failClosed,
     onEvent: onEvent ?? ((e) => events.push(e)),
     shouldGate,
     forecast,
@@ -188,6 +189,30 @@ console.log('\n[6] fail-open — forecast network error does NOT block');
   ok(result === undefined, 'fail-open returns undefined');
   ok(logger.warnings.some((w) => w.includes('forecast() failed')), 'warning logged');
   ok(events.some((e) => e.type === 'forecast_error'), 'forecast_error telemetry emitted');
+}
+
+console.log('\n[6b] enforce + failClosed — forecast error BLOCKS (NemoClaw posture)');
+{
+  pendingForecasts.clear();
+  const { cfg, events } = makeCfg({
+    mode: 'enforce',
+    failClosed: true,
+    forecastError: Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' }),
+  });
+  const logger = makeLogger();
+  const result = await handleBeforeToolCall({ toolName: 'run_sql', params: { statement: 'DELETE FROM users' }, toolCallId: 'tc6b' }, cfg, logger);
+  ok(result?.block === true, 'fail-closed blocks the tool call');
+  ok(/unreachable/i.test(result?.blockReason ?? ''), 'blockReason explains the gate was unreachable');
+  ok(logger.warnings.some((w) => w.includes('FAILING CLOSED')), 'fail-closed warning logged');
+  ok(events.some((e) => e.type === 'forecast_error' && e.failedClosed === true), 'forecast_error telemetry marks failedClosed');
+}
+
+console.log('\n[6c] observe + failClosed — never blocks (observe is log-only)');
+{
+  pendingForecasts.clear();
+  const { cfg } = makeCfg({ mode: 'observe', failClosed: true, forecastError: new Error('connect ETIMEDOUT') });
+  const result = await handleBeforeToolCall({ toolName: 'run_sql', params: {}, toolCallId: 'tc6c' }, cfg, makeLogger());
+  ok(result === undefined, 'observe mode never blocks, even with failClosed');
 }
 
 console.log('\n[7] shouldGate opt-out — skipped tools never get forecasted');

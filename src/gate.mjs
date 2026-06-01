@@ -25,6 +25,14 @@ export function resolveConfig(config = {}) {
     apiKey: config.apiKey ?? process.env.BLACKWALL_API_KEY,
     baseUrl: config.baseUrl ?? process.env.BLACKWALL_BASE_URL,
     mode: mode === 'enforce' ? 'enforce' : 'observe',
+    // failClosed (enforce only): when the gate is unreachable, BLOCK the action
+    // instead of letting it run unscored. Off by default (a BW outage shouldn't
+    // break a benign agent); recommended ON for security-positioned deployments
+    // like NemoClaw, where "ran without a verdict" is unacceptable.
+    failClosed:
+      typeof config.failClosed === 'boolean'
+        ? config.failClosed
+        : ['1', 'true', 'yes'].includes(String(process.env.BLACKWALL_FAIL_CLOSED ?? '').toLowerCase()),
     cautionAction: ['block', 'approve', 'allow'].includes(cautionAction) ? cautionAction : 'approve',
     shouldGate: typeof config.shouldGate === 'function' ? config.shouldGate : () => true,
     maxInputBytes: typeof config.maxInputBytes === 'number' ? config.maxInputBytes : DEFAULT_MAX_INPUT_BYTES,
@@ -133,9 +141,17 @@ export async function handleBeforeToolCall(event, cfg, logger = console) {
       { apiKey: cfg.apiKey, baseUrl: cfg.baseUrl }
     );
   } catch (err) {
-    // Fail-open: BW outage must NEVER block the agent.
-    logger.warn?.(`[blackwall] forecast() failed for tool "${toolName}" — proceeding without gate: ${err?.message ?? err}`);
-    emit(cfg.onEvent, { type: 'forecast_error', toolName, error: err });
+    const failedClosed = cfg.mode === 'enforce' && cfg.failClosed;
+    emit(cfg.onEvent, { type: 'forecast_error', toolName, error: err, failedClosed });
+    if (failedClosed) {
+      // Fail CLOSED: an unreachable gate blocks the action rather than letting it
+      // run unscored (enforce + failClosed). Recommended for NemoClaw-style posture.
+      const blockReason = `BLACK_WALL gate unreachable — failing closed: ${err?.message ?? err}`;
+      logger.warn?.(`[blackwall] forecast() failed for tool "${toolName}" — FAILING CLOSED (blocked): ${err?.message ?? err}`);
+      return { block: true, blockReason };
+    }
+    // Default: fail OPEN — a BW outage must not break a benign agent.
+    logger.warn?.(`[blackwall] forecast() failed for tool "${toolName}" — proceeding without gate (fail-open): ${err?.message ?? err}`);
     return undefined;
   }
 
