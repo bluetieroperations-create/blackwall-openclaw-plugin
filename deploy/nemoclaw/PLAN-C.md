@@ -91,6 +91,10 @@ and pursue the NemoClaw submission.
   from the sandbox until you widen it). Set it to the host's sandbox-facing IP and add
   a host firewall rule so **only the sandbox subnet** can reach the port — never leave
   `0.0.0.0:8787` open to the public internet on a droplet.
+- **Bounded by default.** Caps concurrent connections (`RELAY_MAX_CONN`, default 64)
+  and times out slow / half-open clients (`requestTimeout` 35s, `headersTimeout` 10s)
+  on top of the per-request body cap — so a flood or a slow-loris can't exhaust host
+  memory. Tune via env if you expect real load.
 - **Not an open proxy.** Upstream host + scheme are locked to `BLACKWALL_UPSTREAM` — the
   relay hard-asserts `new URL(target).host`/`.protocol` match the upstream after URL
   normalization and refuses anything else (502), so the client cannot steer off-host via

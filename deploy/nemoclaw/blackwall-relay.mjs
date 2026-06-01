@@ -23,7 +23,8 @@
  *     forwarded as-is; the relay never stores or injects it.
  *   - Fail-safe bind: defaults to 127.0.0.1. Set RELAY_BIND to the host IP the
  *     sandbox reaches, and FIREWALL that port off the public internet.
- *   - Body cap + upstream timeout to bound abuse.
+ *   - Bounded: body cap + connection cap + request/header/upstream timeouts, so a
+ *     flood of slow/half-open clients can't exhaust host memory.
  */
 import http from 'node:http';
 
@@ -120,10 +121,18 @@ const server = http.createServer((req, res) => {
   });
 });
 
+// Bound resource use: cap concurrent connections (each may buffer up to MAX_BODY)
+// and time out slow / half-open clients so a trickle of stalled requests can't pin
+// host memory. Backpressure for a firewalled demo relay — tune via env for real load.
+server.maxConnections = Number(process.env.RELAY_MAX_CONN || 64);
+server.requestTimeout = Number(process.env.RELAY_REQUEST_TIMEOUT_MS || 35000); // > upstream timeout (20s default)
+server.headersTimeout = Number(process.env.RELAY_HEADERS_TIMEOUT_MS || 10000);
+
 server.on('error', (e) => { console.error('relay server error:', e.message); process.exit(1); });
 server.listen(PORT, BIND, () => {
   console.log(`BLACK_WALL relay: http://${BIND}:${PORT}  ->  ${UPSTREAM}`);
   console.log(`Sandbox env:  BLACKWALL_BASE_URL=http://<host-ip>:${PORT}  NO_PROXY=<host-ip>`);
+  console.log(`limits: maxConn=${server.maxConnections}  requestTimeout=${server.requestTimeout}ms  bodyCap=${MAX_BODY}B`);
   if (BIND === '127.0.0.1') console.log('NOTE: bound to loopback — the sandbox cannot reach it yet. Set RELAY_BIND to the host IP the sandbox reaches, and firewall that port.');
   if (!TOKEN) console.log('NOTE: no RELAY_TOKEN — rely on RELAY_BIND + a host firewall to limit who reaches this port.');
 });
