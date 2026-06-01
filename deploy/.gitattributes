@@ -1,0 +1,6 @@
+# These files run on Linux droplets / inside Linux containers. Force LF so bash and
+# node never choke on a CRLF shebang ("/usr/bin/env bash^M: bad interpreter").
+*.sh           text eol=lf
+*.mjs          text eol=lf
+*.json         text eol=lf
+Containerfile  text eol=lf
