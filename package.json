@@ -1,6 +1,6 @@
 {
   "name": "blackwall-openclaw-plugin",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "BLACK_WALL pre-action guardrail for OpenClaw agents. Hooks `before_tool_call` to call forecast() before any tool runs; blocks STOP verdicts; auto-reports outcomes via observe(). Receipts are Ed25519-signed and verifiable offline.",
   "type": "module",
   "main": "./index.mjs",
@@ -38,7 +38,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "blackwall-mcp": "^1.4.0"
+    "blackwall-mcp": "^1.4.1"
   },
   "peerDependencies": {
     "openclaw": ">=2026.4.0"
