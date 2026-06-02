@@ -1,0 +1,26 @@
+# Build the plugin into NVIDIA's REAL NemoClaw sandbox-base image, so the official
+# sandbox smoke (scripts/sandbox-smoke.mjs) can run inside it. This is the "Level A"
+# blueprint proof from docs/sandbox-smoke-test.md — the before_tool_call hook firing
+# + a live BLACK_WALL round-trip from inside the actual NVIDIA sandbox image.
+#
+# Mirrors .github/workflows/verify-nemoclaw-dockerfile.yml against the live base image.
+#
+# NOTE: a plain `podman run` of this image has NORMAL egress — it does NOT exercise an
+# onboarded NemoClaw sandbox's default-deny egress proxy (that's "Level B", which needs
+# the `nemoclaw` CLI + egress-doctor.mjs). This proves the plugin works in NVIDIA's
+# image; it does not test the proxy.
+ARG SANDBOX_BASE=ghcr.io/nvidia/nemoclaw/sandbox-base:latest
+FROM ${SANDBOX_BASE}
+
+ARG BLACKWALL_PLUGIN_REF=main
+RUN git clone --depth 1 --branch ${BLACKWALL_PLUGIN_REF} \
+      https://github.com/bluetieroperations-create/blackwall-openclaw-plugin.git \
+      /opt/blackwall-openclaw-plugin \
+ && cd /opt/blackwall-openclaw-plugin \
+ && npm ci --omit=peer --no-audit --no-fund
+
+# Land the plugin where an onboarded sandbox expects it, world-readable for the
+# unprivileged sandbox user (root builds; the agent runs non-root).
+RUN mkdir -p /sandbox/.openclaw/extensions \
+ && cp -a /opt/blackwall-openclaw-plugin /sandbox/.openclaw/extensions/blackwall-openclaw-plugin \
+ && chmod -R a+rX /sandbox/.openclaw/extensions/blackwall-openclaw-plugin
