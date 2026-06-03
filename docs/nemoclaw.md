@@ -20,63 +20,81 @@ BLACK_WALL is the API the plugin calls. Create a free account and grab a key:
 The free tier covers ~100 forecasts/month — enough to trial the gate end-to-end. Keep the
 key secret; you'll inject it into the sandbox in step 3.
 
-## 2. Bake the plugin into your sandbox image
+## 2. Onboard your sandbox
 
-NemoClaw runs OpenClaw inside a hardened sandbox, so you add the plugin by baking it into
-the sandbox image and onboarding from that Dockerfile. `sandbox-base` already ships `git`,
-so the simplest path pulls straight from the public repo:
-
-```dockerfile
-ARG SANDBOX_BASE=ghcr.io/nvidia/nemoclaw/sandbox-base:latest
-FROM ${SANDBOX_BASE}
-
-# Pull the plugin. Defaults to `main`; pin BLACKWALL_PLUGIN_REF to a release tag for production.
-ARG BLACKWALL_PLUGIN_REF=main
-RUN git clone --depth 1 --branch ${BLACKWALL_PLUGIN_REF} \
-      https://github.com/bluetieroperations-create/blackwall-openclaw-plugin.git \
-      /opt/blackwall-openclaw-plugin \
- && cd /opt/blackwall-openclaw-plugin \
- && npm ci --omit=peer --no-audit --no-fund
-
-# Install + make readable for the unprivileged sandbox user (root builds; the agent runs
-# non-root, so the baked files must be world-readable or the plugin silently fails to load).
-RUN openclaw plugins install /opt/blackwall-openclaw-plugin --force \
- && chmod -R a+rX /sandbox/.openclaw/extensions/blackwall-openclaw-plugin \
- && openclaw doctor --fix
-
-# Default to observe mode (logs verdicts, never blocks) so you can trial it safely.
-# Switch to enforce once you trust it. failClosed=true is recommended for sandboxes.
-ENV BLACKWALL_MODE=observe
-
-WORKDIR /opt/nemoclaw
-```
-
-Then onboard:
+Stand up a normal NemoClaw sandbox first. You add BLACK_WALL to the **running** sandbox in
+step 3 — *not* by baking it into the image (see the box at the end of step 3 for why a
+Dockerfile install bricks the gateway).
 
 ```console
-$ nemoclaw onboard --from ./Dockerfile
+$ nemoclaw onboard --name myagent
 ```
 
-> Vendoring / no outbound git on the build host? `COPY` a local checkout into
-> `/opt/blackwall-openclaw-plugin/` instead of the `git clone`, then run the same
-> `npm ci --omit=peer` + `openclaw plugins install` + `chmod` + `openclaw doctor --fix`.
+Wait for `nemoclaw myagent status` to show the gateway running and inference healthy.
 
-## 3. Give the sandbox your API key
+## 3. Install the plugin into the running sandbox
 
-The plugin reads `BLACKWALL_API_KEY` from the agent runtime. **Don't** bake it in with a bare
-Dockerfile `ENV` — it isn't reliably seen by the NemoClaw gateway, *and* it would burn the
-secret into the image layers.
+NemoClaw sandboxes run with locked-down egress (no arbitrary `git clone` — github is
+proxy-blocked — and npm is a cache-only proxy), so you **prepare the plugin on a machine with
+normal internet, copy it in, and register it as the sandbox user.**
 
-Use NemoClaw's runtime secret substitution instead: reference the key with the
-`openshell:resolve:env:BLACKWALL_API_KEY` placeholder and provide the real value as a
-host-side secret, so OpenShell substitutes it inside the running sandbox — the key never
-lands in the image or on disk. (Same mechanism NemoClaw uses for messaging-bridge tokens.)
+**3a. Prepare the plugin** on your workstation (Node 22, open internet):
 
-> The exact CLI to register a *non-provider* plugin secret depends on your NemoClaw version —
-> the first-class credential flows cover inference providers (`nemoclaw onboard`) and
-> messaging bridges (`nemoclaw channels`). Check `nemoclaw credentials --help` / your version's
-> secrets reference. Without a key the plugin loads but **fails open** (`No apiKey configured`,
-> no gating).
+```console
+$ git clone https://github.com/bluetieroperations-create/blackwall-openclaw-plugin
+$ cd blackwall-openclaw-plugin
+$ npm ci --omit=peer --omit=dev --no-audit --no-fund
+   # --omit=peer: don't vendor the `openclaw` peer (breaks the install's peer-link step)
+   # --omit=dev:  skip esbuild (build-only)
+$ find . -type f -links +1 -exec sh -c 'cp -p "$1" "$1.u" && mv -f "$1.u" "$1"' _ {} \;
+   # openclaw's installer rejects hardlinked files; break any npm-cache hardlinks
+```
+
+**3b. Copy it in and register it AS the sandbox user (uid 998).** Installing as `root`
+rewrites NemoClaw's managed `openclaw.json` and breaks the gateway; installing as the sandbox
+user *merges* into it (the gateway config is preserved):
+
+```console
+$ CID=$(docker ps --filter name=openshell- --format '{{.ID}}' | head -1)   # podman if podman
+$ docker cp . "$CID":/tmp/bwplugin
+$ docker exec -u root "$CID" chown -R 998:998 /tmp/bwplugin
+$ docker exec -u 998 "$CID" bash -lc 'HOME=/sandbox openclaw plugins install /tmp/bwplugin --force'
+```
+
+**3c. Deliver your API key.** NemoClaw does **not** propagate Docker `ENV` into the spawned
+agent — but the agent shell sources `/etc/profile.d`, so an `export` there reaches
+`process.env.BLACKWALL_API_KEY` (the only place the plugin reads its key):
+
+```console
+$ read -rs KEY    # paste bw_live_… (not echoed)
+$ docker exec -u root "$CID" sh -c \
+    'umask 077; printf "export BLACKWALL_API_KEY=%s\nexport BLACKWALL_MODE=observe\n" "$0" \
+       > /etc/profile.d/blackwall.sh; chmod a+r /etc/profile.d/blackwall.sh' "$KEY"
+```
+
+`observe` logs verdicts but never blocks — safe for a trial. Switch to `enforce` (and
+`BLACKWALL_FAIL_CLOSED=true`, recommended for sandboxes) once you trust it. The key lives only
+in the running container's `/etc/profile.d` — not in any image layer or your Dockerfile.
+
+**3d. Reload the gateway** so the agent re-spawns with the plugin and key:
+
+```console
+$ nemoclaw myagent recover
+```
+
+> **Verified end-to-end** (NemoClaw v0.0.55 / OpenClaw 2026.5.22, fresh sandbox): after these
+> steps the gateway reports **running**, `openclaw config validate` passes, `openclaw plugins
+> inspect blackwall-openclaw-plugin` shows `Status: loaded · Format: openclaw` with
+> `before_tool_call` / `after_tool_call`, and the plugin's startup `No apiKey configured`
+> warning is **gone** (the profile.d key reached it).
+
+> **Why not bake it into a Dockerfile?** `openclaw plugins install` writes `openclaw.json`. At
+> image-build time that file is created *before* `nemoclaw onboard` configures the gateway, so
+> the onboard can't write `gateway.mode` / auth and **the gateway refuses to start**. Run as
+> `root` at runtime it rewrites the onboard's config and drops the gateway section — same
+> brick. Installing as the **sandbox user (998) into an already-onboarded sandbox** is the only
+> non-destructive path. Without a key the plugin still loads but **fails open** (`No apiKey
+> configured`, no gating).
 
 ## 4. Network egress
 

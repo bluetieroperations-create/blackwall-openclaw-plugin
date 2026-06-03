@@ -38,7 +38,7 @@ This plugin uses OpenClaw's standard `before_tool_call` hook contract. Because e
 | Host | Compatibility | Install path |
 |---|---|---|
 | **OpenClaw** (canonical) | ✅ | The install snippet above. |
-| **NVIDIA NemoClaw** (sandbox runtime) | ✅ — see deployment note below | Bake into your sandbox Dockerfile so the plugin lands in `/sandbox/.openclaw/extensions/`. |
+| **NVIDIA NemoClaw** (sandbox runtime) | ✅ — see deployment note below | Install at runtime into the onboarded sandbox (as uid 998). See [`docs/nemoclaw.md`](docs/nemoclaw.md). |
 | **AionUi** (multi-CLI cowork app) | ✅ | Install in your underlying OpenClaw; AionUi spawns OpenClaw and picks up the plugin transparently. |
 | **HiClaw** (Kubernetes multi-runtime orchestrator) | ✅ | Install in the OpenClaw Worker container's image. Worker Template Marketplace inclusion is on our roadmap. |
 | **ClawX** (desktop GUI) | ✅ | Install in your underlying OpenClaw. |
@@ -47,67 +47,21 @@ This plugin uses OpenClaw's standard `before_tool_call` hook contract. Because e
 
 ### NVIDIA NemoClaw deployment note
 
-NemoClaw runs OpenClaw inside a security-hardened sandbox container. To use BLACK_WALL with NemoClaw, bake the plugin into your sandbox image. Two equivalent options — pick whichever fits your build pipeline.
+NemoClaw runs OpenClaw inside a security-hardened sandbox container. **Add BLACK_WALL to the
+running, already-onboarded sandbox — do _not_ bake it into the image.** A build-time
+`openclaw plugins install` pre-creates `openclaw.json` *before* `nemoclaw onboard` writes the
+gateway config, so the onboard can't set `gateway.mode` / auth and **the gateway never
+starts**. Running the install as `root` at runtime rewrites the same managed config and drops
+the gateway section — same brick. The only non-destructive path is to install **as the
+sandbox user (uid 998) into an onboarded sandbox**, deliver the key via `/etc/profile.d`
+(NemoClaw does **not** propagate Docker `ENV` to the agent), then `nemoclaw <name> recover`.
 
-**Option A — clone in the Dockerfile (simplest, no local checkout needed).** `sandbox-base` already includes `git`, so you can pull directly from the public repo. Default ref is `main`; override `BLACKWALL_PLUGIN_REF` with a tag once you want a pinned release.
-
-```dockerfile
-ARG SANDBOX_BASE=ghcr.io/nvidia/nemoclaw/sandbox-base:latest
-FROM ${SANDBOX_BASE}
-
-# Pull the plugin. Defaults to `main`; override BLACKWALL_PLUGIN_REF to pin to a tag once one is published.
-ARG BLACKWALL_PLUGIN_REF=main
-RUN git clone --depth 1 --branch ${BLACKWALL_PLUGIN_REF} \
-      https://github.com/bluetieroperations-create/blackwall-openclaw-plugin.git \
-      /opt/blackwall-openclaw-plugin \
- && cd /opt/blackwall-openclaw-plugin \
- && npm ci --omit=peer --no-audit --no-fund   # --omit=peer: do NOT vendor the `openclaw` peer dep — OpenClaw links it at install; vendoring it breaks the plugin install
-
-# Register it, then make it readable by the unprivileged sandbox user. The NemoClaw
-# sandbox agent runs as a NON-root uid (e.g. 998), but Docker RUN executes as root —
-# so the baked-in files must be world-readable + the dirs traversable or the plugin
-# silently fails to load with a permission error.
-RUN openclaw plugins install /opt/blackwall-openclaw-plugin --force \
- && chmod -R a+rX /sandbox/.openclaw/extensions/blackwall-openclaw-plugin \
- && openclaw doctor --fix
-
-# Set the BLACK_WALL key + mode. NOTE: a bare `ENV` here is NOT seen by the agent/
-# `nemoclaw exec` runtime — inject the key as a NemoClaw secret/credential so the
-# gateway process actually receives it (a Dockerfile ENV alone leaves the plugin
-# fail-open with "No apiKey configured").
-ENV BLACKWALL_API_KEY=bw_live_xxx
-ENV BLACKWALL_MODE=observe
-
-WORKDIR /opt/nemoclaw
-```
-
-> **Observed in the real `ghcr.io/nvidia/nemoclaw/sandbox-base` (2026-05-31):** inside an onboarded sandbox the plugin loads as `Format: openclaw` (`openclaw plugins inspect`), `register()` runs, and the `before_tool_call` hook fires. Each correction above was validated **individually** in-sandbox — `--omit=peer` (naive `npm ci` vendors the `openclaw` peer and breaks `plugins install`) and `chmod -R a+rX` (root-baked files fail to load under the sandbox's unprivileged uid). **Caveat: a clean rebuild + onboard from this exact Dockerfile as a single unit has not yet been run** — the live run applied these fixes piecemeal (manual `chmod`/reinstall via `docker exec`). The recipe reflects what was proven step-by-step; verify a from-scratch build before relying on it in production. See **NemoClaw egress** below for the network policy the plugin needs.
-
-**Option B — COPY from a local checkout (if you're vendoring or running an internal fork).** Useful when the sandbox image build host doesn't have outbound git access:
-
-```dockerfile
-ARG SANDBOX_BASE=ghcr.io/nvidia/nemoclaw/sandbox-base:latest
-FROM ${SANDBOX_BASE}
-
-# Copy a local checkout into the image
-COPY blackwall-openclaw-plugin/ /opt/blackwall-openclaw-plugin/
-WORKDIR /opt/blackwall-openclaw-plugin
-RUN npm ci --omit=peer --no-audit --no-fund   # --omit=peer: OpenClaw links the `openclaw` peer dep at install; vendoring it breaks the install
-
-# Register it + make it readable by the unprivileged sandbox user (Docker RUN is
-# root; the agent runs as a non-root uid and otherwise hits a permission error).
-RUN openclaw plugins install /opt/blackwall-openclaw-plugin --force \
- && chmod -R a+rX /sandbox/.openclaw/extensions/blackwall-openclaw-plugin \
- && openclaw doctor --fix
-
-# Inject the key via a NemoClaw secret (a bare ENV is not seen by the agent runtime).
-ENV BLACKWALL_API_KEY=bw_live_xxx
-ENV BLACKWALL_MODE=observe
-
-WORKDIR /opt/nemoclaw
-```
-
-Then onboard the sandbox: `nemoclaw onboard --from Dockerfile`.
+**→ Full, end-to-end-verified walkthrough: [`docs/nemoclaw.md`](docs/nemoclaw.md).** Verified
+on a fresh sandbox (NemoClaw v0.0.55 / OpenClaw 2026.5.22): gateway running, `openclaw config
+validate` passes, `openclaw plugins inspect` shows `Status: loaded · Format: openclaw` with
+`before_tool_call` / `after_tool_call`, and the key reaches the plugin (its startup `No apiKey
+configured` warning clears). See **NemoClaw egress** below for the network policy the plugin
+needs.
 
 ### NemoClaw egress — the plugin needs `blackwalltier.com` allowed
 

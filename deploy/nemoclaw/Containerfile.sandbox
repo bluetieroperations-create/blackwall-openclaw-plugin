@@ -1,3 +1,9 @@
+# NOTE: this is a SMOKE-TEST image only — it is NOT how you deploy BLACK_WALL into an
+# onboarded NemoClaw sandbox. The `cp -a` placement below works for a plain `podman run`
+# that directly imports the plugin (scripts/sandbox-smoke.mjs); it does NOT register the
+# plugin with an onboarded sandbox's OpenClaw gateway. For the real, end-to-end-verified
+# deployment (runtime install as the sandbox user + /etc/profile.d key), see ../../docs/nemoclaw.md.
+#
 # Build the plugin into NVIDIA's REAL NemoClaw sandbox-base image, so the official
 # sandbox smoke (scripts/sandbox-smoke.mjs) can run inside it. This is the "Level A"
 # blueprint proof from docs/sandbox-smoke-test.md — the before_tool_call hook firing
