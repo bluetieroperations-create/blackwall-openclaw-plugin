@@ -2,7 +2,7 @@
   "id": "blackwall-openclaw-plugin",
   "name": "BLACK_WALL Preflight Guardrail",
   "description": "Pre-action risk check for OpenClaw tool calls. Hooks before_tool_call to call BLACK_WALL forecast(); in enforce mode, blocks STOP verdicts and surfaces CAUTION as approval prompts. Receipts are Ed25519-signed and verifiable offline.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "enabledByDefault": false,
   "activation": {
     "onStartup": true,

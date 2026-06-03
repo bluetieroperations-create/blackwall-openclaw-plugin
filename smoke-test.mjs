@@ -122,6 +122,7 @@ console.log('\n[2] enforce + STOP → block:true with blockReason, observe(abort
   // observe is fire-and-forget — give microtasks a chance to flush
   await new Promise((r) => setImmediate(r));
   ok(observeCalls.some((c) => c.forecastId === 'fc_stop' && c.args.outcome_class === 'aborted'), 'observe(aborted) called for the STOP');
+  ok(!pendingForecasts.has('tc2'), 'STOP path evicts its pendingForecasts entry (no leak — after_tool_call never fires for a blocked tool)');
 }
 
 console.log('\n[3] enforce + CAUTION + cautionAction=approve → requireApproval prompt');
@@ -163,6 +164,7 @@ console.log('\n[4] enforce + CAUTION + cautionAction=block → hard block');
   const result = await handleBeforeToolCall({ toolName: 'send_msg', params: {}, toolCallId: 'tc4' }, cfg, makeLogger());
   ok(result?.block === true, 'block: true when cautionAction=block');
   ok(result.blockReason.includes('AMBIGUOUS_INTENT'), 'blockReason includes flag');
+  ok(!pendingForecasts.has('tc4'), 'CAUTION->block path evicts its pendingForecasts entry (no leak)');
 }
 
 console.log('\n[5] enforce + CAUTION + cautionAction=allow → undefined (proceed)');

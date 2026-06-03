@@ -13,10 +13,43 @@ const DEFAULT_FORECAST_TIMEOUT_MS = 15_000;
 
 /**
  * Map of toolCallId / runId-keyed entry -> forecast verdict. Module-scoped so
- * before_tool_call and after_tool_call share state. Bounded — entries are
- * deleted as soon as after_tool_call consumes them.
+ * before_tool_call and after_tool_call share state. Bounded so blocked/abandoned
+ * entries can't accumulate: block paths (STOP, CAUTION->block) evict immediately,
+ * and a TTL timer auto-evicts any entry whose after_tool_call never arrives
+ * (e.g. a denied approval prompt, or a tool the host never executed).
  */
 export const pendingForecasts = new Map();
+// Parallel map of key -> eviction timer, kept separate so pendingForecasts stays
+// a plain key->verdict map (unchanged value shape for consumers/tests).
+const pendingTimers = new Map();
+
+// TTL after which a stashed forecast auto-evicts if after_tool_call never fires.
+const PENDING_TTL_MS = Math.max(1000, Number(process.env.BLACKWALL_PENDING_TTL_MS) || 5 * 60_000);
+
+// Stash a forecast for after_tool_call correlation, with a TTL safety-net so an
+// entry can never outlive its tool call indefinitely.
+function rememberForecast(k, verdict) {
+  if (!k || !verdict?.id) return;
+  forgetForecast(k); // replace any stale entry/timer for this key
+  const timer = setTimeout(() => {
+    pendingForecasts.delete(k);
+    pendingTimers.delete(k);
+  }, PENDING_TTL_MS);
+  // A pending eviction timer must not keep the host process alive.
+  if (typeof timer?.unref === 'function') timer.unref();
+  pendingForecasts.set(k, verdict);
+  pendingTimers.set(k, timer);
+}
+
+// Evict an entry and clear its TTL timer. Safe to call for an absent key.
+function forgetForecast(k) {
+  const t = pendingTimers.get(k);
+  if (t) {
+    clearTimeout(t);
+    pendingTimers.delete(k);
+  }
+  pendingForecasts.delete(k);
+}
 
 export function resolveConfig(config = {}) {
   const mode = (config.mode ?? process.env.BLACKWALL_MODE ?? 'observe').toLowerCase();
@@ -155,9 +188,10 @@ export async function handleBeforeToolCall(event, cfg, logger = console) {
     return undefined;
   }
 
-  // Stash for after_tool_call to consume.
+  // Stash for after_tool_call to consume. Evicted on block paths below and via a
+  // TTL safety-net, so blocked/abandoned entries can't accumulate.
   const k = keyFor(event);
-  if (k && verdict?.id) pendingForecasts.set(k, verdict);
+  rememberForecast(k, verdict);
 
   const recommendation = verdict?.recommendation;
   const riskScore = typeof verdict?.risk_score === 'number' ? verdict.risk_score : '?';
@@ -188,6 +222,7 @@ export async function handleBeforeToolCall(event, cfg, logger = console) {
         emit(cfg.onEvent, { type: 'observe_error', toolName, forecastId: verdict.id, error: err });
       });
     }
+    forgetForecast(k); // blocked -> no after_tool_call will arrive; don't leak the entry
     return {
       block: true,
       blockReason: buildBlockReason(toolName, verdict),
@@ -199,6 +234,7 @@ export async function handleBeforeToolCall(event, cfg, logger = console) {
     if (cfg.cautionAction === 'allow') return undefined;
     if (cfg.cautionAction === 'block') {
       emit(cfg.onEvent, { type: 'stop', toolName, forecastId: verdict?.id, recommendation });
+      forgetForecast(k); // blocked -> no after_tool_call; don't leak the entry
       return { block: true, blockReason: buildBlockReason(toolName, verdict) };
     }
     emit(cfg.onEvent, { type: 'require_approval', toolName, forecastId: verdict?.id, recommendation });
@@ -234,7 +270,7 @@ export async function handleAfterToolCall(event, cfg, logger = console) {
   if (!k) return;
   const verdict = pendingForecasts.get(k);
   if (!verdict?.id) return;
-  pendingForecasts.delete(k);
+  forgetForecast(k);
 
   const hadError = typeof event?.error === 'string' && event.error.length > 0;
   const outcomeClass = hadError ? 'diverged' : 'matched';
