@@ -297,6 +297,33 @@ console.log('\n[12] missing toolName → no-op without error');
   eq(forecastCalls.length, 0, 'forecast not called');
 }
 
+console.log('\n[13] apiKey resolves from a FILE when env is absent (sandboxed runtimes, e.g. NemoClaw)');
+{
+  const { writeFileSync, mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'bw-key-'));
+  const keyFile = join(dir, 'blackwall.key');
+  writeFileSync(keyFile, '  bw_live_FROMFILE0001  \n');
+  const savedKey = process.env.BLACKWALL_API_KEY;
+  const savedFile = process.env.BLACKWALL_API_KEY_FILE;
+  delete process.env.BLACKWALL_API_KEY;
+  process.env.BLACKWALL_API_KEY_FILE = keyFile;
+  try {
+    eq(resolveConfig({}).apiKey, 'bw_live_FROMFILE0001', 'apiKey read + trimmed from BLACKWALL_API_KEY_FILE');
+    eq(resolveConfig({ apiKey: 'bw_live_CFG' }).apiKey, 'bw_live_CFG', 'config.apiKey takes precedence over the file');
+    process.env.BLACKWALL_API_KEY = 'bw_live_ENV';
+    eq(resolveConfig({}).apiKey, 'bw_live_ENV', 'env takes precedence over the file');
+    delete process.env.BLACKWALL_API_KEY;
+    process.env.BLACKWALL_API_KEY_FILE = join(dir, 'does-not-exist.key');
+    eq(resolveConfig({}).apiKey, undefined, 'missing key file → undefined (no throw)');
+  } finally {
+    if (savedKey === undefined) delete process.env.BLACKWALL_API_KEY; else process.env.BLACKWALL_API_KEY = savedKey;
+    if (savedFile === undefined) delete process.env.BLACKWALL_API_KEY_FILE; else process.env.BLACKWALL_API_KEY_FILE = savedFile;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // ============================================================================
 
 console.log(`\n${passed} passed · ${failed} failed`);

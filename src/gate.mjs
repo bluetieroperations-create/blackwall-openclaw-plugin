@@ -6,10 +6,49 @@
  * everything the unit tests exercise.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { forecast as defaultForecast, observe as defaultObserve } from 'blackwall-mcp/lib';
 
 const DEFAULT_MAX_INPUT_BYTES = 8 * 1024;
 const DEFAULT_FORECAST_TIMEOUT_MS = 15_000;
+
+/**
+ * Resolve the API key from a FILE, for sandboxed runtimes (e.g. NVIDIA NemoClaw) where the
+ * agent process inherits its env from the host gateway and you CANNOT set `BLACKWALL_API_KEY`
+ * in it — but you CAN drop a file the agent reads. Tries, in order: `$BLACKWALL_API_KEY_FILE`,
+ * then `$OPENCLAW_HOME/.openclaw/blackwall.key`, then `$HOME/.openclaw/blackwall.key`. Returns
+ * the trimmed contents of the first readable, non-empty file, else undefined. Never throws.
+ */
+function pluginRelativeKeyPath() {
+  // …/.openclaw/extensions/<plugin>/src/gate.mjs → …/.openclaw/blackwall.key. Env-independent,
+  // so it still resolves when the agent runtime scrubs the plugin's process env (NemoClaw's
+  // embedded-agent path does exactly that, which is why the env/OPENCLAW_HOME candidates miss).
+  try {
+    return fileURLToPath(new URL('../../../blackwall.key', import.meta.url));
+  } catch {
+    return null;
+  }
+}
+
+function readApiKeyFile() {
+  const candidates = [
+    process.env.BLACKWALL_API_KEY_FILE,
+    process.env.OPENCLAW_HOME && `${process.env.OPENCLAW_HOME}/.openclaw/blackwall.key`,
+    process.env.HOME && `${process.env.HOME}/.openclaw/blackwall.key`,
+    pluginRelativeKeyPath(),
+  ];
+  for (const path of candidates) {
+    if (!path) continue;
+    try {
+      const value = readFileSync(path, 'utf8').trim();
+      if (value) return value;
+    } catch {
+      // not present / unreadable — try the next candidate
+    }
+  }
+  return undefined;
+}
 
 /**
  * Map of toolCallId / runId-keyed entry -> forecast verdict. Module-scoped so
@@ -55,7 +94,7 @@ export function resolveConfig(config = {}) {
   const mode = (config.mode ?? process.env.BLACKWALL_MODE ?? 'observe').toLowerCase();
   const cautionAction = (config.cautionAction ?? 'approve').toLowerCase();
   return {
-    apiKey: config.apiKey ?? process.env.BLACKWALL_API_KEY,
+    apiKey: config.apiKey ?? process.env.BLACKWALL_API_KEY ?? readApiKeyFile(),
     baseUrl: config.baseUrl ?? process.env.BLACKWALL_BASE_URL,
     mode: mode === 'enforce' ? 'enforce' : 'observe',
     // failClosed (enforce only): when the gate is unreachable, BLOCK the action
