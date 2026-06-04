@@ -6,20 +6,33 @@
  * everything the unit tests exercise.
  */
 
-import { readFileSync } from 'node:fs';
+import { openSync, readSync, closeSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { forecast as defaultForecast, observe as defaultObserve } from 'blackwall-mcp/lib';
 
 const DEFAULT_MAX_INPUT_BYTES = 8 * 1024;
 const DEFAULT_FORECAST_TIMEOUT_MS = 15_000;
 
-/**
- * Resolve the API key from a FILE, for sandboxed runtimes (e.g. NVIDIA NemoClaw) where the
- * agent process inherits its env from the host gateway and you CANNOT set `BLACKWALL_API_KEY`
- * in it — but you CAN drop a file the agent reads. Tries, in order: `$BLACKWALL_API_KEY_FILE`,
- * then `$OPENCLAW_HOME/.openclaw/blackwall.key`, then `$HOME/.openclaw/blackwall.key`. Returns
- * the trimmed contents of the first readable, non-empty file, else undefined. Never throws.
- */
+// An API key is < 200 bytes; cap the read so a huge/binary file at a candidate path can't be
+// slurped into memory (OOM) at plugin load. Reads at most MAX+1 bytes and ignores anything larger.
+const MAX_KEY_FILE_BYTES = 4096;
+
+function readKeyFileBounded(path) {
+  let fd;
+  try {
+    fd = openSync(path, 'r');
+    const buf = Buffer.allocUnsafe(MAX_KEY_FILE_BYTES + 1);
+    const n = readSync(fd, buf, 0, MAX_KEY_FILE_BYTES + 1, 0);
+    if (n > MAX_KEY_FILE_BYTES) return null; // oversized -> not an API key file
+    return buf.toString('utf8', 0, n).trim() || null;
+  } catch {
+    return null; // missing / unreadable / not a regular file
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 function pluginRelativeKeyPath() {
   // …/.openclaw/extensions/<plugin>/src/gate.mjs → …/.openclaw/blackwall.key. Env-independent,
   // so it still resolves when the agent runtime scrubs the plugin's process env (NemoClaw's
@@ -31,21 +44,27 @@ function pluginRelativeKeyPath() {
   }
 }
 
+/**
+ * Resolve the API key from a FILE, for sandboxed runtimes (e.g. NVIDIA NemoClaw) where the agent
+ * process inherits a scrubbed env and you CANNOT set `BLACKWALL_API_KEY` — but you CAN drop a file
+ * the agent reads. Tries, in order: `$BLACKWALL_API_KEY_FILE`, `$OPENCLAW_HOME/.openclaw/blackwall.key`,
+ * `$HOME/.openclaw/blackwall.key`, and an env-independent path derived from the plugin's own location.
+ * Returns the trimmed contents of the first readable, non-empty, within-cap file, else undefined.
+ * Never throws.
+ */
 function readApiKeyFile() {
+  const home = process.env.OPENCLAW_HOME;
+  const userHome = process.env.HOME;
   const candidates = [
     process.env.BLACKWALL_API_KEY_FILE,
-    process.env.OPENCLAW_HOME && `${process.env.OPENCLAW_HOME}/.openclaw/blackwall.key`,
-    process.env.HOME && `${process.env.HOME}/.openclaw/blackwall.key`,
+    home && join(home, '.openclaw', 'blackwall.key'),
+    userHome && join(userHome, '.openclaw', 'blackwall.key'),
     pluginRelativeKeyPath(),
   ];
   for (const path of candidates) {
     if (!path) continue;
-    try {
-      const value = readFileSync(path, 'utf8').trim();
-      if (value) return value;
-    } catch {
-      // not present / unreadable — try the next candidate
-    }
+    const value = readKeyFileBounded(path);
+    if (value) return value;
   }
   return undefined;
 }

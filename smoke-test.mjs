@@ -317,6 +317,10 @@ console.log('\n[13] apiKey resolves from a FILE when env is absent (sandboxed ru
     delete process.env.BLACKWALL_API_KEY;
     process.env.BLACKWALL_API_KEY_FILE = join(dir, 'does-not-exist.key');
     eq(resolveConfig({}).apiKey, undefined, 'missing key file → undefined (no throw)');
+    const bigFile = join(dir, 'big.key');
+    writeFileSync(bigFile, 'x'.repeat(5000));
+    process.env.BLACKWALL_API_KEY_FILE = bigFile;
+    eq(resolveConfig({}).apiKey, undefined, 'oversized key file (>4KB) ignored — bounded read, no OOM');
   } finally {
     if (savedKey === undefined) delete process.env.BLACKWALL_API_KEY; else process.env.BLACKWALL_API_KEY = savedKey;
     if (savedFile === undefined) delete process.env.BLACKWALL_API_KEY_FILE; else process.env.BLACKWALL_API_KEY_FILE = savedFile;

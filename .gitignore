@@ -4,4 +4,7 @@ dist/
 .npmrc
 .env
 .env.*
+# API key files (the file-based key delivery for sandboxed runtimes writes blackwall.key)
+blackwall.key
+*.key
 .DS_Store
