@@ -69,8 +69,10 @@ agent can read. Write it as the sandbox user under the agent's `OPENCLAW_HOME`:
 
 ```console
 $ read -rs KEY    # paste bw_live_… (not echoed)
-$ docker exec -u 998 "$CID" sh -c \
-    'umask 077; mkdir -p /sandbox/.openclaw; printf "%s" "$0" > /sandbox/.openclaw/blackwall.key' "$KEY"
+$ printf '%s' "$KEY" | docker exec -i -u 998 "$CID" sh -c \
+    'umask 077; mkdir -p /sandbox/.openclaw; cat > /sandbox/.openclaw/blackwall.key'
+   # pipe over stdin (note -i) — not a positional arg — so the key never lands in the
+   # host `docker exec …` argv (visible in `ps` / exec audit logs). umask 077 => mode 600.
 $ docker exec -u root "$CID" sh -c \
     'printf "export BLACKWALL_MODE=observe\n" > /etc/profile.d/blackwall.sh; chmod a+r /etc/profile.d/blackwall.sh'
 ```
