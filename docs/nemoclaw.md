@@ -61,20 +61,27 @@ $ docker exec -u root "$CID" chown -R 998:998 /tmp/bwplugin
 $ docker exec -u 998 "$CID" bash -lc 'HOME=/sandbox openclaw plugins install /tmp/bwplugin --force'
 ```
 
-**3c. Deliver your API key.** NemoClaw does **not** propagate Docker `ENV` into the spawned
-agent — but the agent shell sources `/etc/profile.d`, so an `export` there reaches
-`process.env.BLACKWALL_API_KEY` (the only place the plugin reads its key):
+**3c. Deliver your API key — as a *file*, not an env var.** NemoClaw scrubs the
+Gateway-spawned agent's environment, so neither Docker `ENV` nor an `/etc/profile.d` export
+reaches the gating agent process (`process.env.BLACKWALL_API_KEY` is empty inside the agent
+even though a login shell sees it). The plugin therefore also reads its key from a file the
+agent can read. Write it as the sandbox user under the agent's `OPENCLAW_HOME`:
 
 ```console
 $ read -rs KEY    # paste bw_live_… (not echoed)
+$ docker exec -u 998 "$CID" sh -c \
+    'umask 077; mkdir -p /sandbox/.openclaw; printf "%s" "$0" > /sandbox/.openclaw/blackwall.key' "$KEY"
 $ docker exec -u root "$CID" sh -c \
-    'umask 077; printf "export BLACKWALL_API_KEY=%s\nexport BLACKWALL_MODE=observe\n" "$0" \
-       > /etc/profile.d/blackwall.sh; chmod a+r /etc/profile.d/blackwall.sh' "$KEY"
+    'printf "export BLACKWALL_MODE=observe\n" > /etc/profile.d/blackwall.sh; chmod a+r /etc/profile.d/blackwall.sh'
 ```
 
-`observe` logs verdicts but never blocks — safe for a trial. Switch to `enforce` (and
-`BLACKWALL_FAIL_CLOSED=true`, recommended for sandboxes) once you trust it. The key lives only
-in the running container's `/etc/profile.d` — not in any image layer or your Dockerfile.
+The plugin resolves the key from (in order) `config.apiKey` → `BLACKWALL_API_KEY` →
+`$BLACKWALL_API_KEY_FILE` → `$OPENCLAW_HOME/.openclaw/blackwall.key` →
+`$HOME/.openclaw/blackwall.key` → a path relative to the installed plugin bundle — so the
+file above is picked up even under the scrubbed agent env. `observe` logs verdicts but never
+blocks — safe for a trial; switch to `enforce` (and `BLACKWALL_FAIL_CLOSED=true`, recommended
+for sandboxes) once you trust it. The key lives only in the running container — not in any
+image layer or your Dockerfile.
 
 **3d. Reload the gateway** so the agent re-spawns with the plugin and key:
 
@@ -86,7 +93,7 @@ $ nemoclaw myagent recover
 > steps the gateway reports **running**, `openclaw config validate` passes, `openclaw plugins
 > inspect blackwall-openclaw-plugin` shows `Status: loaded · Format: openclaw` with
 > `before_tool_call` / `after_tool_call`, and the plugin's startup `No apiKey configured`
-> warning is **gone** (the profile.d key reached it).
+> warning is **gone** (the key-file reached it under the scrubbed agent env).
 
 > **Why not bake it into a Dockerfile?** `openclaw plugins install` writes `openclaw.json`. At
 > image-build time that file is created *before* `nemoclaw onboard` configures the gateway, so
@@ -98,20 +105,33 @@ $ nemoclaw myagent recover
 
 ## 4. Network egress
 
-The plugin calls `https://blackwalltier.com`. On NemoClaw's **default / balanced** policy
-tier this is permitted out of the box (validated 2026-06-02 — no proxy or custom preset
-needed). If you run a **stricter default-deny** egress policy, allowlist the host or the
-gate will fail open:
+The plugin calls `https://blackwalltier.com`. NemoClaw **default-denies** this host (the
+egress proxy returns `403` on the `CONNECT`), so you must add an allow preset — otherwise the
+gate fails open. Two details matter: use `access: full` + `tls: skip` (a raw L4 passthrough;
+the proxy's MITM otherwise stalls the TLS handshake), and allowlist the `node` binary that
+makes the call. Apply it **after onboard**:
 
 ```yaml
-# blackwall-egress.yaml — only needed under a stricter-than-balanced policy
+# policy/blackwall-egress.yaml
 preset:
   name: blackwall-egress
+  description: "BLACK_WALL pre-action risk gate API access"
 network_policies:
   blackwall:
     name: blackwall
-    allow:
+    endpoints:
       - host: blackwalltier.com
+        port: 443
+        access: full      # raw passthrough — do not MITM
+        tls: skip          # proxy MITM stalls the handshake; skip it
+        enforcement: enforce
+    binaries:
+      - { path: /usr/local/bin/node }
+      - { path: /usr/bin/node }
+```
+
+```console
+$ nemoclaw myagent policy-add --from-file policy/blackwall-egress.yaml --yes
 ```
 
 ## 5. Verify it's gating
