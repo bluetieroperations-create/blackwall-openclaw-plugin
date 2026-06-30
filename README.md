@@ -6,11 +6,23 @@ Powered by [BLACK_WALL](https://blackwalltier.com). Get a free key at [blackwall
 
 ## Install
 
+Install through OpenClaw's plugin CLI:
+
+```bash
+openclaw plugins install npm:blackwall-openclaw-plugin
+openclaw plugins inspect blackwall-openclaw-plugin --runtime --json
+```
+
+The inspect command should show the plugin loaded with the `before_tool_call`
+hook before you switch to enforce mode.
+
+If you are wiring the package manually, install it with npm:
+
 ```bash
 npm i blackwall-openclaw-plugin
 ```
 
-Add to `~/.openclaw/openclaw.json`:
+Then add it to `~/.openclaw/openclaw.json`:
 
 ```json5
 {
